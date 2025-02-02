@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalChat - Offline Messaging App</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.1.1/crypto-js.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+        .message-bubble {
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen">
+    <div class="container mx-auto p-4 h-full flex flex-col">
+        <!-- Header -->
+        <div class="bg-teal-600 text-white p-4 rounded-t-lg shadow-md">
+            <div class="flex justify-between items-center">
+                <h1 class="text-xl font-bold">LocalChat</h1>
+                <div class="flex items-center space-x-3">
+                    <span id="connectionStatus" class="text-sm bg-red-500 px-2 py-1 rounded">Offline</span>
+                    <span id="peerId" class="text-sm"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <div class="flex-1 bg-white rounded-b-lg shadow-md flex flex-col">
+            <!-- Messages Container -->
+            <div id="messages" class="flex-1 p-4 overflow-y-auto space-y-4"></div>
+
+            <!-- Input Area -->
+            <div class="border-t p-4 space-y-2">
+                <div class="flex items-center space-x-2 mb-2">
+                    <input type="text" id="peerIdInput" placeholder="Enter Peer ID to connect" 
+                           class="flex-1 p-2 border rounded focus:outline-none focus:border-teal-500">
+                    <button onclick="connectToPeer()" 
+                            class="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">
+                        Connect
+                    </button>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <input type="text" id="messageInput" placeholder="Type your message..." 
+                           class="flex-1 p-2 border rounded focus:outline-none focus:border-teal-500">
+                    <input type="file" id="fileInput" class="hidden">
+                    <button onclick="document.getElementById('fileInput').click()" 
+                            class="bg-gray-200 p-2 rounded hover:bg-gray-300">
+                        <i class="bi bi-paperclip"></i>
+                    </button>
+                    <button onclick="sendMessage()" 
+                            class="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let peer;
+        let connections = new Set();
+        const SECRET_KEY = 'your-secret-key';
+
+        // Initialize PeerJS
+        function initializePeer() {
+            peer = new Peer();
+            
+            peer.on('open', (id) => {
+                document.getElementById('peerId').textContent = `Your ID: ${id}`;
+                document.getElementById('connectionStatus').textContent = 'Online';
+                document.getElementById('connectionStatus').classList.remove('bg-red-500');
+                document.getElementById('connectionStatus').classList.add('bg-green-500');
+            });
+
+            peer.on('connection', (conn) => {
+                handleConnection(conn);
+            });
+        }
+
+        // Connect to another peer
+        function connectToPeer() {
+            const peerId = document.getElementById('peerIdInput').value;
+            if (!peerId) return;
+
+            const conn = peer.connect(peerId);
+            handleConnection(conn);
+        }
+
+        // Handle new connections
+        function handleConnection(conn) {
+            connections.add(conn);
+
+            conn.on('open', () => {
+                addSystemMessage(`Connected to ${conn.peer}`);
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'message') {
+                    const decryptedMessage = CryptoJS.AES.decrypt(data.content, SECRET_KEY).toString(CryptoJS.enc.Utf8);
+                    addMessage(decryptedMessage, 'received');
+                } else if (data.type === 'file') {
+                    handleReceivedFile(data);
+                }
+            });
+
+            conn.on('close', () => {
+                connections.delete(conn);
+                addSystemMessage(`Disconnected from ${conn.peer}`);
+            });
+        }
+
+        // Send message
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            const encryptedMessage = CryptoJS.AES.encrypt(message, SECRET_KEY).toString();
+
+            connections.forEach(conn => {
+                conn.send({
+                    type: 'message',
+                    content: encryptedMessage
+                });
+            });
+
+            addMessage(message, 'sent');
+            messageInput.value = '';
+        }
+
+        // Handle file input
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const fileData = {
+                    type: 'file',
+                    name: file.name,
+                    content: e.target.result
+                };
+
+                connections.forEach(conn => {
+                    conn.send(fileData);
+                });
+
+                addMessage(`Sent file: ${file.name}`, 'sent');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Handle received file
+        function handleReceivedFile(data) {
+            const link = document.createElement('a');
+            link.href = data.content;
+            link.download = data.name;
+            addMessage(`Received file: ${data.name} - <a href="${data.content}" download="${data.name}" class="text-blue-500 hover:underline">Download</a>`, 'received');
+        }
+
+        // Add message to chat
+        function addMessage(message, type) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${type === 'sent' ? 'justify-end' : 'justify-start'}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `message-bubble rounded-lg p-3 ${type === 'sent' ? 'bg-teal-500 text-white' : 'bg-gray-200'}`;
+            bubble.innerHTML = message;
+            
+            messageDiv.appendChild(bubble);
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Add system message
+        function addSystemMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex justify-center';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bg-gray-100 text-gray-600 text-sm py-1 px-3 rounded';
+            bubble.textContent = message;
+            
+            messageDiv.appendChild(bubble);
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Initialize on page load
+        window.onload = initializePeer;
+
+        // Enter key to send message
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
